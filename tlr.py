@@ -638,6 +638,11 @@ class Recording:
                         self.parts.append(target)
                         self.written += size
                     if rc == 0 and size > 0:
+                        # CDN schliesst die Verbindung gern mitten im Live:
+                        # nur beenden, wenn der Raum wirklich offline ist
+                        if self.cfg.reconnect_on_close and self._still_live():
+                            Log.info("connection closed, stream still live — reconnecting")
+                            return True, "cdn closed"
                         return False, "stream ended"
                     Log.warn(f"ffmpeg exited ({rc}) {('after ' + human(size)) if size else 'without data'}"
                              + (f": {err.splitlines()[-1][:160]}" if err else ""))
@@ -855,6 +860,9 @@ class Config:
     check_only: bool = False
     stall_timeout: int = 25
     live_check: int = 30
+    # CDN schliesst die Verbindung mitten im Live: mit Live-Check reconnecten.
+    # In Tests abschaltbar, damit die Suite offline bleibt.
+    reconnect_on_close: bool = True
     max_reconnects: int = 20
     keep_parts: bool = False
     quiet: bool = False
@@ -1108,9 +1116,11 @@ def install_signal_handlers(session: Session) -> None:
     def handler(signum, frame):  # noqa: ARG001
         state["hits"] += 1
         rec = session.current
-        if state["hits"] == 1 and rec is not None:
-            Log.warn("stopping cleanly … (Ctrl-C again to abort)")
-            rec.stop.set()
+        if state["hits"] == 1:
+            Log.warn("stopping cleanly … (again to abort)")
+            session.abort = True  # ein Signal beendet den Lauf, auch im Watch-Modus
+            if rec is not None:
+                rec.stop.set()
         else:
             Log.warn("aborting")
             session.abort = True
