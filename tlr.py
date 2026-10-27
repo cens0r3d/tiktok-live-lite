@@ -47,7 +47,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -125,6 +125,10 @@ class Blocked(Retryable):
 
 class NotFound(TlrError):
     """Username/room does not exist."""
+
+
+class PrivateAccount(TlrError):
+    """User is live, but TikTok withholds room/stream data (private account)."""
 
 
 # --------------------------------------------------------------------------- #
@@ -231,6 +235,7 @@ class Live:
     title: str = ""
     streams: list[Stream] = field(default_factory=list)
     source: str = "signed"
+    diag: dict = field(default_factory=dict)
 
 
 def _first_int(*vals: Any) -> int:
@@ -353,13 +358,33 @@ class Resolver:
 
         u = data.get("user") if isinstance(data.get("user"), dict) else {}
         room = data.get("liveRoom") if isinstance(data.get("liveRoom"), dict) else {}
+        stats = data.get("stats") if isinstance(data.get("stats"), dict) else {}
         room_id = str(u.get("roomId") or "") or str(room.get("id") or "")
         status = _first_int(room.get("status"), u.get("status"))
+        secret = bool(u.get("secret"))
+        followers = _first_int(stats.get("followerCount"))
+        diag = {
+            "status": status,
+            "secret": secret,
+            "followers": followers,
+            "title": str(room.get("title") or ""),
+        }
 
         if status and status not in STATUS_LIVE:
             raise Offline(f"@{user} is not live (status {status})")
         if not room_id:
-            raise Offline(f"@{user} is not live (no room)")
+            # Live, but no room id: TikTok redacts the whole live payload for
+            # private accounts ("secret": true) unless the request is logged in
+            # and follows the account. Reported as "not live" in the reference
+            # implementation, which sent users hunting for the wrong bug.
+            if secret:
+                raise PrivateAccount(
+                    f"@{user} is live, but it is a private account: TikTok only hands "
+                    f"out the room/stream URL to logged-in followers (followers={followers}).\n"
+                    f"    Add cookies:  -cookies cookies.txt   or   -cookie \"sessionid=...; tt_chain_token=...\"\n"
+                    f"    (cookies of an account that follows @{user}; see README → Cookies)"
+                )
+            raise Retryable("live, but TikTok returned no room id (retrying)")
 
         stream_data = room.get("streamData") if isinstance(room.get("streamData"), dict) else {}
         pull = stream_data.get("pull_data") if isinstance(stream_data.get("pull_data"), dict) else {}
@@ -374,6 +399,7 @@ class Resolver:
             title=str(room.get("title") or ""),
             streams=streams,
             source="signed",
+            diag=diag,
         )
 
     # -- source 2: webcast room info (needs a room_id)
@@ -880,6 +906,20 @@ def load_cookies(path: Path | None) -> dict[str, str]:
     return jar
 
 
+def parse_cookie_string(text: str | None) -> dict[str, str]:
+    """'a=1; b=2' -> {'a': '1', 'b': '2'} — quick path for one-off runs."""
+    if not text:
+        return {}
+    jar: dict[str, str] = {}
+    for part in text.replace("\n", ";").split(";"):
+        if "=" in part:
+            k, v = part.split("=", 1)
+            k = k.strip()
+            if k:
+                jar[k] = v.strip()
+    return jar
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="tlr",
@@ -907,6 +947,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="best|worst|<label>|<auflösung>, z.B. 'sd' oder '720p' (default: best)")
     p.add_argument("-proxy", "--proxy", help="HTTP-Proxy, z.B. http://127.0.0.1:8080")
     p.add_argument("-cookies", "--cookies", type=Path, help="cookies.json oder cookies.txt")
+    p.add_argument("-cookie", "--cookie", metavar="STRING",
+                   help="Cookies direkt als String: 'sessionid=...; tt_chain_token=...'")
     p.add_argument("-ffmpeg-path", "--ffmpeg-path", dest="ffmpeg", default="ffmpeg")
     p.add_argument("-bitrate", "--bitrate", help="Re-Encode mit dieser Bitrate (z.B. 1M) — kostet Qualität")
     p.add_argument("--audio-only", action="store_true", help="Nur Audio, als .m4a")
@@ -923,6 +965,7 @@ def build_parser() -> argparse.ArgumentParser:
 def cfg_from_args(argv: list[str] | None = None) -> Config:
     a = build_parser().parse_args(argv)
     cookie_map = load_cookies(a.cookies)
+    cookie_map.update(parse_cookie_string(a.cookie))
     http = Http(proxy=a.proxy, cookies=cookie_map)
     out = a.output.expanduser()
     out.mkdir(parents=True, exist_ok=True)
@@ -1012,6 +1055,12 @@ class Session:
         Log.info(f"@{live.user} is live — room {live.room_id} ({live.source})")
         if live.title:
             Log.info(f'title: "{live.title}"')
+        if live.diag:
+            d = live.diag
+            Log.info(
+                f"diag: status={d.get('status')} secret={d.get('secret')} "
+                f"followers={d.get('followers')} cookies={len(cfg.http.cookies)}"
+            )
         for s in live.streams:
             ok = probe_stream(cfg.http, s)
             Log.info(f"  {s.describe():38s} {'ok' if ok else 'no data'}  {s.label}")

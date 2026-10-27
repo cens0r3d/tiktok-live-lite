@@ -83,6 +83,7 @@ python3 tlr.py -room_id 7699631452921154317
 | `-quality` | `best` (Default), `worst`, oder Label/Auflösung wie `sd`, `720p` |
 | `-proxy` | HTTP-Proxy, z. B. `http://127.0.0.1:8080` |
 | `-cookies` | `cookies.json` (Dict) oder Netscape `cookies.txt` |
+| `-cookie` | Cookies direkt als String, z. B. `"sessionid=...; tt_chain_token=..."` |
 | `-ffmpeg-path` | eigener ffmpeg-Pfad |
 | `-bitrate` | Re-Encode mit dieser Bitrate — kostet Qualität, nur wenn nötig |
 | `--audio-only` | nur Tonspur, Ausgabe `.m4a` |
@@ -126,15 +127,40 @@ Ein Aufnahme-Durchlauf kann aus mehreren Segmenten bestehen (`_part1.ts`, `_part
 
 Dateiname: `TK_<user>_<YYYY.MM.DD_HH-MM-SS>.mp4`
 
-### Cookies
+### Cookies (private Accounts)
 
-Werden nur gebraucht, wenn TikTok die IP blockt (WAF) oder der Stream privat ist. Entweder `cookies.json` neben das Skript legen:
+Cookies brauchst du in zwei Fällen: TikTok blockt die IP (WAF), oder der Account ist **privat**.
 
-```json
-{ "sessionid": "...", "tt_chain_token": "...", "tt_csrf_token": "..." }
+Bei einem privaten Account liefert TikTok zwar „live", aber ohne Room-ID, ohne Stream-URL und mit `followers=0` — die Daten gehen nur an eingeloggte Follower. Das Tool sagt das jetzt auch genau so:
+
+```
+[x] @beispiel is live, but it is a private account: TikTok only hands out the
+    room/stream URL to logged-in followers (followers=0).
 ```
 
-oder `-cookies pfad/cookies.txt` (Netscape-Format aus der Browser-Extension). Die Cookies gehen an die HTTP-Aufrufe **und** als Header an ffmpeg.
+Drei Wege, Cookies zu übergeben:
+
+```bash
+# 1. Datei (Dict oder Netscape-Format)
+python3 tlr.py -user x -cookies cookies.txt
+
+# 2. direkt als String
+python3 tlr.py -user x -cookie "sessionid=abc123; tt_chain_token=def456"
+
+# 3. cookies.json neben tlr.py ablegen (wird automatisch geladen)
+```
+
+Wichtig: Die Cookies müssen von einem Account stammen, **der dem privaten Account folgt** — sonst bleibt die Antwort leer. Besorgen: im Browser bei tiktok.com einloggen → DevTools → Application → Cookies → `sessionid`, `tt_chain_token`, `tt_csrf_token` kopieren; oder Extension, die `cookies.txt` im Netscape-Format exportiert.
+
+Die Cookies gehen an alle HTTP-Aufrufe **und** als Header an ffmpeg (`-headers`), damit auch der CDN-Zugriff authentifiziert ist.
+
+`--check` zeigt dir, was TikTok tatsächlich geantwortet hat:
+
+```
+diag: status=2 secret=False followers=16712829 cookies=0
+```
+
+`secret=True` bzw. `followers=0` bei einem live gemeldeten Account = privat, nicht „offline".
 
 ### Dauerbetrieb
 

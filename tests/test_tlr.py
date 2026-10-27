@@ -253,6 +253,37 @@ class TestResolver(unittest.TestCase):
         self.assertEqual(live.room_id, "777")
         self.assertIn("from_page.flv", live.streams[0].url)
 
+    def test_private_account_is_reported_as_private_not_offline(self):
+        # what TikTok returns for a private account: live, but every live field
+        # redacted (roomId "", no streamData, followers 0, secret true)
+        payload = {
+            "data": {
+                "user": {"uniqueId": "private_guy", "roomId": "", "status": 2, "secret": True},
+                "stats": {"followerCount": 0},
+                "liveRoom": {"status": 2, "title": ""},
+            }
+        }
+        http = FakeHttp(sign_then(payload))
+        with self.assertRaises(tlr.PrivateAccount) as ctx:
+            tlr.Resolver(http).resolve("private_guy", None, None)
+        self.assertIn("private account", str(ctx.exception))
+        self.assertIn("cookies", str(ctx.exception))
+
+    def test_live_without_room_and_without_secret_is_retryable(self):
+        payload = {
+            "data": {
+                "user": {"uniqueId": "x", "roomId": "", "status": 2, "secret": False},
+                "liveRoom": {"status": 2},
+            }
+        }
+        http = FakeHttp({
+            "/tiktok/room/api/sign": ("json", SIGN_ROUTE),
+            "/api-live/user/room/": ("json", payload),
+            "/live": ("html", "<html>nothing here</html>"),
+        })
+        with self.assertRaises(tlr.Retryable):
+            tlr.Resolver(http).resolve("x", None, None)
+
     def test_url_is_parsed_into_user(self):
         self.assertEqual(
             tlr.parse_user_from_url("https://www.tiktok.com/@mike/live?lang=de"), "mike"
@@ -434,6 +465,13 @@ class TestCli(unittest.TestCase):
     def test_missing_ffmpeg_is_reported(self):
         with self.assertRaises(tlr.TlrError):
             tlr.check_ffmpeg("definitely-not-ffmpeg")
+
+    def test_cookie_string(self):
+        jar = tlr.parse_cookie_string("sessionid=abc; tt_chain_token=d e f;  broken")
+        self.assertEqual(jar, {"sessionid": "abc", "tt_chain_token": "d e f"})
+        cfg = tlr.cfg_from_args(["-user", "a", "-cookie", "sessionid=xyz; tt_chain_token=q"])
+        self.assertEqual(cfg.http.headers["Cookie"], "sessionid=xyz; tt_chain_token=q")
+        self.assertEqual(cfg.cookie_header, "sessionid=xyz; tt_chain_token=q")
 
     def test_cookie_json_and_netscape(self):
         with tempfile.TemporaryDirectory() as d:
