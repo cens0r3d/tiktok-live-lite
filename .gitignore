@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+cookies.json
+telegram.json
+*.ts
+*.mp4
+*.m4a
+rec/
+output/
+.DS_Store
