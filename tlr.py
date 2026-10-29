@@ -40,6 +40,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -638,8 +639,8 @@ class Recording:
                         self.parts.append(target)
                         self.written += size
                     if rc == 0 and size > 0:
-                        # CDN schliesst die Verbindung gern mitten im Live:
-                        # nur beenden, wenn der Raum wirklich offline ist
+                        # The CDN likes to close the connection mid-live:
+                        # only stop when the room is really offline
                         if self.cfg.reconnect_on_close and self._still_live():
                             Log.info("connection closed, stream still live — reconnecting")
                             return True, "cdn closed"
@@ -708,7 +709,12 @@ class Recording:
         while not self.stop.is_set() and not self.hard_stop.is_set():
             if self.cfg.duration and time.time() - self.started >= self.cfg.duration:
                 break
-            retry, reason = self._segment(index)
+            try:
+                retry, reason = self._segment(index)
+            except Exception as exc:  # noqa: BLE001 - a crash must not swallow the recording
+                Log.error(f"segment crashed: {type(exc).__name__}: {exc}")
+                traceback.print_exc(file=sys.stdout)
+                retry, reason = True, "crash"
             if not retry:
                 break
             failures += 1
@@ -860,8 +866,8 @@ class Config:
     check_only: bool = False
     stall_timeout: int = 25
     live_check: int = 30
-    # CDN schliesst die Verbindung mitten im Live: mit Live-Check reconnecten.
-    # In Tests abschaltbar, damit die Suite offline bleibt.
+    # CDN closes the connection mid-live: reconnect after a live check.
+    # Can be disabled in tests so the suite stays offline.
     reconnect_on_close: bool = True
     max_reconnects: int = 20
     keep_parts: bool = False
@@ -946,23 +952,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-url", "--url", help="TikTok-Live-URL")
     p.add_argument("-room_id", "--room-id", dest="room_id", help="Room-ID")
     p.add_argument("-mode", "--mode", choices=("manual", "watch"), default="manual",
-                   help="manual = jetzt aufnehmen, watch = dauerhaft lauschen (default: manual)")
+                   help="manual = record now, watch = listen continuously (default: manual)")
     p.add_argument("-interval", "--interval", "-automatic_interval", dest="interval", type=float,
                    default=5.0, help="Minuten zwischen Live-Checks im watch-Modus (default: 5)")
     p.add_argument("-output", "--output", type=Path, default=Path("."), help="Zielverzeichnis")
     p.add_argument("-duration", "--duration", type=int, help="Max. Aufnahmedauer in Sekunden")
     p.add_argument("-quality", "--quality", default="best",
-                   help="best|worst|<label>|<auflösung>, z.B. 'sd' oder '720p' (default: best)")
-    p.add_argument("-proxy", "--proxy", help="HTTP-Proxy, z.B. http://127.0.0.1:8080")
-    p.add_argument("-cookies", "--cookies", type=Path, help="cookies.json oder cookies.txt")
+                   help="best|worst|<label>|<resolution>, e.g. 'sd' or '720p' (default: best)")
+    p.add_argument("-proxy", "--proxy", help="HTTP proxy, e.g. http://127.0.0.1:8080")
+    p.add_argument("-cookies", "--cookies", type=Path, help="cookies.json or cookies.txt")
     p.add_argument("-cookie", "--cookie", metavar="STRING",
                    help="Cookies direkt als String: 'sessionid=...; tt_chain_token=...'")
     p.add_argument("-ffmpeg-path", "--ffmpeg-path", dest="ffmpeg", default="ffmpeg")
-    p.add_argument("-bitrate", "--bitrate", help="Re-Encode mit dieser Bitrate (z.B. 1M) — kostet Qualität")
-    p.add_argument("--audio-only", action="store_true", help="Nur Audio, als .m4a")
-    p.add_argument("--check", action="store_true", help="Nur Status/Qualitäten zeigen, nichts aufnehmen")
-    p.add_argument("--stall-timeout", type=int, default=25, help="Sekunden ohne Daten bis Reconnect (default: 25)")
-    p.add_argument("--live-check", type=int, default=30, help="Sekunden zwischen Live-Checks während der Aufnahme")
+    p.add_argument("-bitrate", "--bitrate", help="Re-encode at this bitrate (e.g. 1M) - costs quality")
+    p.add_argument("--audio-only", action="store_true", help="Audio only, as .m4a")
+    p.add_argument("--check", action="store_true", help="Only show status/qualities, record nothing")
+    p.add_argument("--stall-timeout", type=int, default=25, help="Seconds without data before reconnecting (default: 25)")
+    p.add_argument("--live-check", type=int, default=30, help="Seconds between live checks while recording")
     p.add_argument("--max-reconnects", type=int, default=20, help="Max. Reconnects pro Aufnahme")
     p.add_argument("--keep-parts", action="store_true", help="Rohe .ts-Segmente behalten")
     p.add_argument("-q", "--quiet", action="store_true", help="Weniger Ausgabe")
@@ -1104,6 +1110,10 @@ class Session:
                 Log.debug(str(e))
             except (Retryable, TlrError) as e:
                 Log.warn(f"check failed: {e}")
+            except Exception as exc:  # noqa: BLE001 - a multi-day watch must survive anything
+                Log.error(f"session crashed: {type(exc).__name__}: {exc}")
+                traceback.print_exc(file=sys.stdout)
+                time.sleep(10)
             deadline = time.time() + cfg.interval * 60
             while time.time() < deadline and not self.abort:
                 time.sleep(min(5, max(0.2, deadline - time.time())))
@@ -1118,7 +1128,7 @@ def install_signal_handlers(session: Session) -> None:
         rec = session.current
         if state["hits"] == 1:
             Log.warn("stopping cleanly … (again to abort)")
-            session.abort = True  # ein Signal beendet den Lauf, auch im Watch-Modus
+            session.abort = True  # one signal ends the run, even in watch mode
             if rec is not None:
                 rec.stop.set()
         else:
@@ -1159,6 +1169,10 @@ def main(argv: list[str] | None = None) -> int:
         return 130
     except TlrError as e:
         Log.error(str(e))
+        return 1
+    except Exception as exc:  # noqa: BLE001 - report, never die with a bare traceback
+        Log.error(f"unexpected error: {type(exc).__name__}: {exc}")
+        traceback.print_exc(file=sys.stdout)
         return 1
 
 

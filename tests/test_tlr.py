@@ -373,7 +373,7 @@ class TestRecording(unittest.TestCase):
             user="fake",
             stall_timeout=3,
             live_check=10 ** 9,   # keep the live probe out of the unit test
-            reconnect_on_close=False,  # dito: kein Resolve im Test
+            reconnect_on_close=False,  # ditto: no resolve in the test
             max_reconnects=3,
         )
         base.update(kw)

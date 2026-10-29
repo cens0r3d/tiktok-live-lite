@@ -1,34 +1,34 @@
-# tlr — TikTok Live Recorder (lean rewrite)
+# tlr — TikTok LIVE Recorder (lean rewrite)
 
-Ein schlanker Ersatz für [Michele0303/TikTok-Live-Recorder](https://github.com/Michele0303/TikTok-Live-Recorder).
-Eine Datei, nur Standardbibliothek + `ffmpeg`-Binary — dafür ohne die Bug-Klassen, die das Original seit Jahren begleiten.
+A lean replacement for [Michele0303/TikTok-Live-Recorder](https://github.com/Michele0303/TikTok-Live-Recorder).
+One file, standard library only plus the `ffmpeg` binary — without the classes of bugs the original has carried for years.
 
 ```bash
-python3 tlr.py -user irgendeinaccount
+python3 tlr.py -user someaccount
 ```
 
 ---
 
-## Warum der Rewrite
+## Why the rewrite
 
-Das Original lädt den FLV-Stream als Byte-Strom durch Python in eine Datei und konvertiert danach. Das koppelt jede Netzwerkstörung an die Aufnahme, hat keinen Read-Timeout, keine Stall-Erkennung, zerlegt die Datei bei Ctrl-C und greift gelegentlich die Audio-only-Variante.
+The original streams FLV bytes through Python into a file and re-muxes afterwards. That couples every network hiccup to the recording, has no read timeout, no stall detection, garbles the file on Ctrl-C and occasionally picks the audio-only variant.
 
-Die häufigsten offenen Issues und was hier anders ist:
+The most common open issues and what is different here:
 
-| Problem im Original | Ursache | Lösung hier |
+| Problem in the original | Cause | Fix here |
 |---|---|---|
-| `JSONDecodeError` / „expecting value line 1" | `.json()` auf jede Antwort, auch auf WAF-Seiten | jede Antwort läuft durch `Http.get_json`, Nicht-JSON = retrybarer Zustand |
-| Room-ID wird nicht gefunden | nur ein Signing-Dienst | drei Quellen nacheinander: signed API → webcast → Live-Seite |
-| „alle User sind online" | `check_alive` wird geglaubt | Stream-URL wird auf echte Bytes geprüft, bevor aufgenommen wird |
-| Recorder hängt, stoppt nicht | Download ohne Timeout, Live-Check erst nach Verbindungsabbau | `-rw_timeout` + Größen-Watchdog + Live-Check alle 30 s |
-| Bitrate ~1000 kbps, Qualitätsverlust | `-bitrate` erzwingt Re-Encode | `-c copy` in MPEG-TS, Original-Bitrate bleibt |
-| Datei ist audio-only | Qualitätsauswahl nimmt `ao`-Stream mit | Audio-Varianten werden aussortiert |
-| Absturz ohne MP4, Endlosschleife bei Ctrl-C | Konvertierung im Fehlerpfad, multiprocessing | Ctrl-C = sauberer Stopp, TS bleibt liegen wenn Remux scheitert |
+| `JSONDecodeError` / "expecting value line 1" | `.json()` on every response, including WAF pages | every response goes through `Http.get_json`, non-JSON is a retryable state |
+| Room ID not found | only one signing service | three sources in sequence: signed API → webcast → live page |
+| "everyone is online" | `check_alive` is trusted | the stream URL is probed for real bytes before recording starts |
+| Recorder hangs and never stops | download without timeout, live check only after the connection drops | `-rw_timeout` + size watchdog + live check every 30 s |
+| Bitrate ~1000 kbps, quality loss | `-bitrate` forces a re-encode | `-c copy` into MPEG-TS, original bitrate preserved |
+| File is audio-only | quality selection picks up the `ao` stream | audio variants are filtered out |
+| Crash without MP4, endless loop on Ctrl-C | conversion in the error path, multiprocessing | Ctrl-C stops cleanly, the TS file stays if the remux fails |
 
-## Voraussetzungen
+## Requirements
 
-* Python 3.9+ (keine Pakete nötig)
-* `ffmpeg` im PATH (getestet mit 7.1)
+* Python 3.9+ (no packages needed)
+* `ffmpeg` in `PATH` (tested with 7.1)
 
 ```bash
 sudo apt install ffmpeg        # Debian/Ubuntu
@@ -36,135 +36,135 @@ brew install ffmpeg            # macOS
 pkg install ffmpeg             # Termux
 ```
 
-Kopieren, fertig:
+Copy it, done:
 
 ```bash
-git clone git@github.com:cens0r3d/tiktok-live-lite.git
+git clone https://github.com/cens0r3d/tiktok-live-lite.git
 cd tiktok-live-lite
 python3 tlr.py --check -user aljazeeraenglish
 ```
 
-## Benutzung
+## Usage
 
 ```bash
-# jetzt aufnehmen, bis der Stream endet
+# record now until the stream ends
 python3 tlr.py -user account
 
-# nur schauen: ist live, welche Qualitäten liefert der Stream?
+# just look: is the account live, which qualities does the stream offer?
 python3 tlr.py --check -user account
 
-# dauerhaft lauschen, alle 3 Minuten prüfen
+# listen permanently, check every 3 minutes
 python3 tlr.py -user account -mode watch -interval 3
 
-# mehrere Accounts (je Prozess einer) in ein Zielverzeichnis
+# several accounts (one process each) into a target directory
 python3 tlr.py -user a -output /data/live &
 python3 tlr.py -user b -output /data/live &
 
-# 15 Minuten mitschneiden, kleinste Qualität, nur Ton
+# record for 15 minutes, lowest quality, audio only
 python3 tlr.py -user account -duration 900 -quality worst
 python3 tlr.py -user account --audio-only
 
-# per URL oder Room-ID
+# by URL or room ID
 python3 tlr.py -url https://www.tiktok.com/@account/live
 python3 tlr.py -room_id 7699631452921154317
 ```
 
-### Optionen
+### Options
 
-| Flag | Bedeutung |
+| Flag | Meaning |
 |---|---|
-| `-user`, `--user` | Username (ohne `@`), mehrere mit Komma |
-| `-url` | TikTok-Live-URL |
-| `-room_id` | Room-ID direkt |
-| `-mode manual\|watch` | `manual` = jetzt aufnehmen, `watch` = dauerhaft lauschen (Default: `manual`) |
-| `-interval` | Minuten zwischen Checks im Watch-Modus (Default: 5, Alias `-automatic_interval`) |
-| `-output` | Zielverzeichnis (Default: aktuelles Verzeichnis) |
-| `-duration` | maximale Aufnahmedauer in Sekunden |
-| `-quality` | `best` (Default), `worst`, oder Label/Auflösung wie `sd`, `720p` |
-| `-proxy` | HTTP-Proxy, z. B. `http://127.0.0.1:8080` |
-| `-cookies` | `cookies.json` (Dict) oder Netscape `cookies.txt` |
-| `-cookie` | Cookies direkt als String, z. B. `"sessionid=...; tt_chain_token=..."` |
-| `-ffmpeg-path` | eigener ffmpeg-Pfad |
-| `-bitrate` | Re-Encode mit dieser Bitrate — kostet Qualität, nur wenn nötig |
-| `--audio-only` | nur Tonspur, Ausgabe `.m4a` |
-| `--check` | nur Status und Qualitäten ausgeben, nichts aufnehmen |
-| `--stall-timeout` | Sekunden ohne Datenwachstum bis Reconnect (Default: 25) |
-| `--live-check` | Sekunden zwischen Live-Checks während der Aufnahme (Default: 30) |
-| `--max-reconnects` | maximale Reconnects pro Aufnahme (Default: 20) |
-| `--keep-parts` | rohe `.ts`-Segmente behalten |
-| `-q` | weniger Ausgabe |
+| `-user`, `--user` | Username (without `@`), several separated by commas |
+| `-url` | TikTok live URL |
+| `-room_id` | Room ID directly |
+| `-mode manual\|watch` | `manual` = record now, `watch` = listen permanently (default: `manual`) |
+| `-interval` | Minutes between checks in watch mode (default: 5, alias `-automatic_interval`) |
+| `-output` | Target directory (default: current directory) |
+| `-duration` | Maximum recording length in seconds |
+| `-quality` | `best` (default), `worst`, or a label/resolution such as `sd`, `720p` |
+| `-proxy` | HTTP proxy, e.g. `http://127.0.0.1:8080` |
+| `-cookies` | `cookies.json` (dict) or Netscape `cookies.txt` |
+| `-cookie` | Cookies directly as a string, e.g. `"sessionid=...; tt_chain_token=..."` |
+| `-ffmpeg-path` | Custom ffmpeg path |
+| `-bitrate` | Re-encode at this bitrate — costs quality, only if needed |
+| `--audio-only` | Audio track only, output `.m4a` |
+| `--check` | Print status and qualities only, record nothing |
+| `--stall-timeout` | Seconds without data growth before reconnecting (default: 25) |
+| `--live-check` | Seconds between live checks while recording (default: 30) |
+| `--max-reconnects` | Maximum reconnects per recording (default: 20) |
+| `--keep-parts` | Keep the raw `.ts` segments |
+| `-q` | Less output |
 
-### Exit-Codes
+### Exit codes
 
-| Code | Bedeutung |
+| Code | Meaning |
 |---|---|
-| 0 | Aufnahme gespeichert (oder `--check`: live) |
-| 1 | Auflösung/Setup fehlgeschlagen (User unbekannt, kein ffmpeg, Netz tot) |
-| 2 | User ist nicht live |
-| 3 | live erkannt, aber kein Stream-Datenfluss |
-| 130 | per Ctrl-C beendet |
+| 0 | Recording saved (or `--check`: live) |
+| 1 | Resolution/setup failed (unknown user, no ffmpeg, network down) |
+| 2 | User is not live |
+| 3 | Live detected, but no stream data flowing |
+| 130 | Stopped by Ctrl-C |
 
-## Wie es funktioniert
-
-```
-User ──► signierte API ──► room_id + status + stream-URLs
-              │ (blockiert / kein JSON)
-              ├─► webcast room/info (wenn room_id bekannt)
-              └─► Live-Seite (HTML-Scrape)
-                        │
-                        ▼
-              URL-Probe: kommen echte Bytes?
-                        │
-                        ▼
-      ffmpeg -c copy → MPEG-TS  ◄── Watchdog (Größe, Timeout, Live-Check)
-                        │                  │ Stall/Abbruch
-                        │                  └─► neues Segment, neue URL
-                        ▼
-        concat + Remux → MP4 (faststart)  |  Fallback: .ts bleibt liegen
-```
-
-Ein Aufnahme-Durchlauf kann aus mehreren Segmenten bestehen (`_part1.ts`, `_part2.ts`, …). Sie werden am Ende zusammengefügt und zu MP4 gemuxt; erst wenn der Remux nachweislich eine Videospur enthält, werden die Segmente gelöscht. Schlägt der Remux fehl, bleibt die Aufnahme als TS erhalten — es geht nichts verloren.
-
-Dateiname: `TK_<user>_<YYYY.MM.DD_HH-MM-SS>.mp4`
-
-### Cookies (private Accounts)
-
-Cookies brauchst du in zwei Fällen: TikTok blockt die IP (WAF), oder der Account ist **privat**.
-
-Bei einem privaten Account liefert TikTok zwar „live", aber ohne Room-ID, ohne Stream-URL und mit `followers=0` — die Daten gehen nur an eingeloggte Follower. Das Tool sagt das jetzt auch genau so:
+## How it works
 
 ```
-[x] @beispiel is live, but it is a private account: TikTok only hands out the
+User ──► signed API ──► room_id + status + stream URLs
+             │ (blocked / no JSON)
+             ├─► webcast room/info (when the room_id is known)
+             └─► live page (HTML scrape)
+                       │
+                       ▼
+             URL probe: are real bytes coming?
+                       │
+                       ▼
+     ffmpeg -c copy → MPEG-TS  ◄── watchdog (size, timeout, live check)
+                       │                  │ stall/abort
+                       │                  └─► new segment, new URL
+                       ▼
+       concat + remux → MP4 (faststart)  |  fallback: .ts stays on disk
+```
+
+One recording run can consist of several segments (`_part1.ts`, `_part2.ts`, …). They are concatenated at the end and remuxed to MP4; the segments are only deleted once the remux demonstrably contains a video stream. If the remux fails, the recording stays on disk as TS — nothing is lost.
+
+Filename: `TK_<user>_<YYYY.MM.DD_HH-MM-SS>.mp4`
+
+### Cookies (private accounts)
+
+You need cookies in two cases: TikTok blocks the IP (WAF), or the account is **private**.
+
+For a private account TikTok answers "live", but without a room ID, without a stream URL and with `followers=0` — that data only goes to logged-in followers. The tool now says exactly that:
+
+```
+[x] @example is live, but it is a private account: TikTok only hands out the
     room/stream URL to logged-in followers (followers=0).
 ```
 
-Drei Wege, Cookies zu übergeben:
+Three ways to pass cookies:
 
 ```bash
-# 1. Datei (Dict oder Netscape-Format)
+# 1. file (dict or Netscape format)
 python3 tlr.py -user x -cookies cookies.txt
 
-# 2. direkt als String
+# 2. directly as a string
 python3 tlr.py -user x -cookie "sessionid=abc123; tt_chain_token=def456"
 
-# 3. cookies.json neben tlr.py ablegen (wird automatisch geladen)
+# 3. drop cookies.json next to tlr.py (loaded automatically)
 ```
 
-Wichtig: Die Cookies müssen von einem Account stammen, **der dem privaten Account folgt** — sonst bleibt die Antwort leer. Besorgen: im Browser bei tiktok.com einloggen → DevTools → Application → Cookies → `sessionid`, `tt_chain_token`, `tt_csrf_token` kopieren; oder Extension, die `cookies.txt` im Netscape-Format exportiert.
+Important: the cookies must come from an account **that follows the private account** — otherwise the answer stays empty. To get them: log in at tiktok.com in the browser → DevTools → Application → Cookies → copy `sessionid`, `tt_chain_token`, `tt_csrf_token`; or use an extension that exports `cookies.txt` in Netscape format.
 
-Die Cookies gehen an alle HTTP-Aufrufe **und** als Header an ffmpeg (`-headers`), damit auch der CDN-Zugriff authentifiziert ist.
+The cookies go into every HTTP call **and** as a header to ffmpeg (`-headers`), so CDN access is authenticated too.
 
-`--check` zeigt dir, was TikTok tatsächlich geantwortet hat:
+`--check` shows you what TikTok actually answered:
 
 ```
 diag: status=2 secret=False followers=16712829 cookies=0
 ```
 
-`secret=True` bzw. `followers=0` bei einem live gemeldeten Account = privat, nicht „offline".
+`secret=True` or `followers=0` on an account reported as live means private, not "offline".
 
-### Dauerbetrieb
+### Daemon mode
 
-`tmux`/`screen` oder systemd:
+`tmux`/`screen` or systemd:
 
 ```ini
 # /etc/systemd/system/tlr@.service
@@ -186,8 +186,8 @@ WantedBy=multi-user.target
 ```
 
 ```bash
-sudo systemctl enable --now tlr@irgendeinaccount
-journalctl -u tlr@irgendeinaccount -f
+sudo systemctl enable --now tlr@someaccount
+journalctl -u tlr@someaccount -f
 ```
 
 ## Tests
@@ -196,14 +196,14 @@ journalctl -u tlr@irgendeinaccount -f
 python3 -m unittest discover -s tests -v
 ```
 
-25 Tests, kein Netzwerk nötig: Parsing/Qualitätsauswahl, HTTP-Guards (HTML statt JSON, kaputtes JSON, leerer Body), Resolver-Pfade (offline, unbekannt, WAF-Fallback), CLI, Cookies — und ein lokaler Fake-CDN, der nach 55 % der Daten hängt, um Stall-Erkennung und Reconnect zu beweisen.
+28 tests, no network required: parsing/quality selection, HTTP guards (HTML instead of JSON, broken JSON, empty body), resolver paths (offline, unknown, WAF fallback), CLI, cookies — and a local fake CDN that stalls after 55 % of the data to prove stall detection and reconnect.
 
-## Grenzen
+## Limits
 
-* `-mode followers` (alle gefolgten Accounts) gibt es hier nicht — dafür bräuchte es Cookies, Sec-UID-Paginierung und einen Prozess pro Account. Für mehrere Accounts: je ein Prozess.
-* Kein Telegram-Upload. Stattdessen Datei am Ende per `-output`-Verzeichnis weiterverarbeiten (z. B. `inotifywait` + `rclone`).
-* Kein Auto-Update, keine Selbstinstallation von Abhängigkeiten.
+* `-mode followers` (all followed accounts) does not exist here — that would need cookies, Sec-UID pagination and one process per account. For several accounts: one process each.
+* No Telegram upload. Instead, process the file from the `-output` directory afterwards (e.g. `inotifywait` + `rclone`).
+* No auto-update, no self-installation of dependencies.
 
-## Rechtliches
+## Legal
 
-Nicht mit TikTok verbunden. Aufnehmen nur, was du aufnehmen darfst. Nutzung auf eigenes Risiko. Lizenz: MIT (wie das Original, von dem die Idee und die CLI-Konventionen stammen).
+Not affiliated with TikTok. Record only what you are allowed to record. Use at your own risk. License: MIT (like the original, which the idea and the CLI conventions come from).

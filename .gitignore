@@ -8,3 +8,6 @@ telegram.json
 rec/
 output/
 .DS_Store
+cookies.txt
+cookies/
+*.cookie
