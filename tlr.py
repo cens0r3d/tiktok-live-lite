@@ -132,6 +132,17 @@ class PrivateAccount(TlrError):
     """User is live, but TikTok withholds room/stream data (private account)."""
 
 
+class BlockedByHost(Retryable):
+    """The host blocked the account whose cookies we send; the room stays shut."""
+
+    def __init__(self, detail: str = "user is in blocklist"):
+        super().__init__(
+            f"webcast refused the room: {detail} — der Account der Cookies ist beim "
+            "Host blockiert, die Live ist damit nicht abrufbar (andere Cookies "
+            "verwenden oder Host bitten, den Account zu entblocken)"
+        )
+
+
 # --------------------------------------------------------------------------- #
 # http
 # --------------------------------------------------------------------------- #
@@ -237,6 +248,20 @@ class Live:
     streams: list[Stream] = field(default_factory=list)
     source: str = "signed"
     diag: dict = field(default_factory=dict)
+
+
+def _room_error_text(payload: dict) -> str:
+    """Pull the human reason out of a room/info error (data.message + prompts).
+
+    TikTok answers e.g. status_code 30006 with
+    data.message "user is in blocklist" and data.prompts
+    "You have been blocked by the host."; without that text the code alone looks
+    like a network hiccup and sends people hunting the wrong bug.
+    """
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    parts = [str(data.get(key) or "").strip() for key in ("message", "prompts")]
+    parts = [part for part in parts if part]
+    return " (" + "; ".join(parts) + ")" if parts else ""
 
 
 def _first_int(*vals: Any) -> int:
@@ -412,7 +437,11 @@ class Resolver:
         if code == 4003110:
             raise Blocked("webcast blocked this IP (4003110)")
         if code != 0:
-            raise Retryable(f"webcast status_code {code}")
+            detail = _room_error_text(payload)
+            lowered = detail.lower()
+            if "blocklist" in lowered or "blocked by the host" in lowered:
+                raise BlockedByHost(detail.strip(" ()"))
+            raise Retryable(f"webcast status_code {code}{detail}")
         room = payload.get("data") if isinstance(payload.get("data"), dict) else {}
         if str(room.get("status")) not in ("2", "3", ""):
             raise Offline("room is closed")

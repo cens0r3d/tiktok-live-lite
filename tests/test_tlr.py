@@ -468,9 +468,17 @@ class TestCli(unittest.TestCase):
             tlr.check_ffmpeg("definitely-not-ffmpeg")
 
     def test_cookie_string(self):
+        import unittest.mock
+
         jar = tlr.parse_cookie_string("sessionid=abc; tt_chain_token=d e f;  broken")
         self.assertEqual(jar, {"sessionid": "abc", "tt_chain_token": "d e f"})
-        cfg = tlr.cfg_from_args(["-user", "a", "-cookie", "sessionid=xyz; tt_chain_token=q"])
+        # load_cookies() liest ohne -cookies automatisch cookies.json neben dem
+        # Skript; auf einer Maschine mit echtem Cookie-Bestand macht das diesen
+        # Test nicht-deterministisch. Fuer den Test abschalten.
+        with unittest.mock.patch.object(tlr, "load_cookies", return_value={}):
+            cfg = tlr.cfg_from_args(
+                ["-user", "a", "-cookie", "sessionid=xyz; tt_chain_token=q"]
+            )
         self.assertEqual(cfg.http.headers["Cookie"], "sessionid=xyz; tt_chain_token=q")
         self.assertEqual(cfg.cookie_header, "sessionid=xyz; tt_chain_token=q")
 
@@ -486,3 +494,36 @@ class TestCli(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestRoomInfoErrors(unittest.TestCase):
+    """room/info status_code 30006 mit Grund im Klartext (30.10.: Host-Block)."""
+
+    def _resolver(self, payload):
+        http = FakeHttp({"/webcast/room/info/": ("json", payload)})
+        return tlr.Resolver(http)
+
+    def test_blocked_by_host_is_named(self):
+        payload = {
+            "data": {
+                "message": "user is in blocklist",
+                "prompts": "You have been blocked by the host.",
+            },
+            "status_code": 30006,
+        }
+        with self.assertRaises(tlr.BlockedByHost) as ctx:
+            self._resolver(payload)._streams_from_room_info("7702547190010415905")
+        msg = str(ctx.exception)
+        self.assertIn("user is in blocklist", msg)
+        self.assertIn("blockiert", msg)
+
+    def test_other_codes_keep_the_reason(self):
+        payload = {"data": {"message": "room is closed"}, "status_code": 30007}
+        with self.assertRaises(tlr.Retryable) as ctx:
+            self._resolver(payload)._streams_from_room_info("42")
+        self.assertIn("30007", str(ctx.exception))
+        self.assertIn("room is closed", str(ctx.exception))
+
+    def test_blocked_by_host_is_retryable(self):
+        # muss die Page-Quelle noch versuchen duerfen, also Retryable bleiben
+        self.assertTrue(issubclass(tlr.BlockedByHost, tlr.Retryable))
