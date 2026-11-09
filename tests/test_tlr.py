@@ -527,3 +527,80 @@ class TestRoomInfoErrors(unittest.TestCase):
     def test_blocked_by_host_is_retryable(self):
         # muss die Page-Quelle noch versuchen duerfen, also Retryable bleiben
         self.assertTrue(issubclass(tlr.BlockedByHost, tlr.Retryable))
+
+
+class TestDeadRoom(unittest.TestCase):
+    """status 2 + leerer Raum + 4003255: nicht live, nicht "check failed"
+
+    Befund 09.11.2026 (@herkules969): der signed-Payload meldete status 2,
+    liveRoom war leer (title "", startTime 0, keine streamData/streamId) und
+    room/info antwortete dauerhaft 4003255 — das lief als Retryable in eine
+    endlose "check failed"-Serie statt als "not live".
+    """
+
+    DEAD_PAYLOAD = {
+        "data": {
+            "user": {
+                "uniqueId": "herkules969",
+                "roomId": "7706192708905863968",
+                "status": 2,
+                "secret": False,
+            },
+            "stats": {"followerCount": 0},
+            "liveRoom": {
+                "id": None,
+                "status": 2,
+                "title": "",
+                "startTime": 0,
+                "liveSubOnly": 0,
+                "liveRoomStats": {"enterCount": 0, "userCount": 0},
+            },
+        }
+    }
+
+    def _routes(self, room_info):
+        return {
+            "/tiktok/room/api/sign": ("json", SIGN_ROUTE),
+            "/api-live/user/room/": ("json", self.DEAD_PAYLOAD),
+            "/webcast/room/info/": ("json", room_info),
+            "/live": ("html", "<html>nothing here</html>"),
+        }
+
+    def test_room_gone_code_is_offline(self):
+        resolver = tlr.Resolver(
+            FakeHttp({"/webcast/room/info/": ("json", {"data": {"prompts": ""}, "status_code": 4003255})})
+        )
+        with self.assertRaises(tlr.Offline) as ctx:
+            resolver._streams_from_room_info("7706192708905863968")
+        self.assertIn("4003255", str(ctx.exception))
+
+    def test_empty_status_two_room_ends_as_not_live(self):
+        http = FakeHttp(self._routes({"data": {"prompts": ""}, "status_code": 4003255}))
+        with self.assertRaises(tlr.Offline):
+            tlr.Resolver(http).resolve("herkules969", None, None)
+
+    def test_stale_room_id_alone_is_offline(self):
+        http = FakeHttp({"/webcast/room/info/": ("json", {"data": {"prompts": ""}, "status_code": 4003255})})
+        with self.assertRaises(tlr.Offline):
+            tlr.Resolver(http).resolve(None, "7706192708905863968", None)
+
+    def test_room_with_live_evidence_but_no_urls_stays_retryable(self):
+        # startTime gesetzt = echter Raum; fehlende URLs duerfen weiter als
+        # "vielleicht gleich" gelten, nicht als offline
+        payload = {
+            "data": {
+                "user": {"uniqueId": "x", "roomId": "42", "status": 2, "secret": False},
+                "liveRoom": {"status": 2, "startTime": 1794232861, "title": ""},
+            }
+        }
+        http = FakeHttp({
+            "/tiktok/room/api/sign": ("json", SIGN_ROUTE),
+            "/api-live/user/room/": ("json", payload),
+            "/webcast/room/info/": ("json", {"data": {"status": 2}, "status_code": 0}),
+            "/live": ("html", "<html>nothing here</html>"),
+        })
+        with self.assertRaises(tlr.Retryable) as ctx:
+            tlr.Resolver(http)._from_signed("x")
+        self.assertNotIsInstance(ctx.exception, tlr.Offline)
+        self.assertIn("no stream urls", str(ctx.exception))
+

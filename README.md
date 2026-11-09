@@ -125,6 +125,8 @@ User ──► signed API ──► room_id + status + stream URLs
 
 One recording run can consist of several segments (`_part1.ts`, `_part2.ts`, …). They are concatenated at the end and remuxed to MP4; the segments are only deleted once the remux demonstrably contains a video stream. If the remux fails, the recording stays on disk as TS — nothing is lost.
 
+`status 2` alone is not liveness. For some channels TikTok answers `status 2` with an empty `liveRoom` (no `id`, `startTime 0`, no `streamData`/`streamId`) even though nothing is running; the room id from `user.roomId` then answers `webcast/room/info` with `status_code 4003255`. That code means "this room has no running stream", so the check ends as *not live* (exit 2) — retrying it only produced an endless `check failed` series. A room that does carry live evidence (`streamId`/`startTime`) but no URLs stays retryable.
+
 Filename: `TK_<user>_<YYYY.MM.DD_HH-MM-SS>.mp4`
 
 ### Cookies (private accounts)

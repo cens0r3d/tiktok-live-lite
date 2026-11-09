@@ -64,6 +64,13 @@ WEBCAST = "https://webcast.tiktok.com"
 # watchdog reconnect when data flows again.
 STATUS_LIVE = (2, 3)
 
+# webcast/room/info answers this when the room id handed out by the signed
+# payload belongs to no running room (stream over, room gone). Observed
+# 2026-11-09 on @herkules969: signed payload still said status 2, but the room
+# answered 4003255 with empty prompts, forever. Treated as "not live" below —
+# retrying it produced an endless "check failed" series.
+ROOM_GONE = 4003255
+
 DEFAULT_HEADERS = {
     "User-Agent": UA,
     "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
@@ -273,6 +280,28 @@ def _first_int(*vals: Any) -> int:
     return 0
 
 
+def _room_has_live_evidence(room: dict | None) -> bool:
+    """Decide whether a room payload really describes a running stream.
+
+    `status: 2` alone is not liveness: TikTok answers exactly that shape for a
+    channel that is not live — status 2, title "", startTime 0, empty
+    liveRoomStats and no streamData/streamId at all — and the room id from
+    `user.roomId` then points at a room that no longer exists. Requiring one of
+    the live fields keeps a real (even if redacted) stream on the retry path
+    while a dead one ends as "not live".
+    """
+    if not isinstance(room, dict):
+        return False
+    if room.get("id") or room.get("streamId"):
+        return True
+    if _first_int(room.get("startTime")) > 0:
+        return True
+    stream_data = room.get("streamData")
+    if not isinstance(stream_data, dict):
+        return False
+    return bool(stream_data.get("pull_data"))
+
+
 def _parse_stream_object(obj: dict) -> list[Stream]:
     """Turn the pull_data blob into an ordered list of usable streams."""
     out: list[Stream] = []
@@ -417,7 +446,19 @@ class Resolver:
         streams = _streams_from_pull_data(pull) if pull else []
         if not streams:
             # room is live but the payload has no urls -> ask the webcast room
-            streams = self._streams_from_room_info(room_id)
+            try:
+                streams = self._streams_from_room_info(room_id)
+            except Offline as e:
+                # keep the user in the line: the cog resets its failure
+                # counter on "is not live" and only escalates the rest
+                raise Offline(f"@{user} is not live — {e}") from None
+        if not streams:
+            if not _room_has_live_evidence(room):
+                raise Offline(
+                    f"@{user} is not live (status {status}, empty room: no "
+                    f"streamData/streamId, startTime 0)"
+                )
+            raise Retryable(f"@{user} is live, but TikTok returned no stream urls")
 
         return Live(
             user=str(u.get("uniqueId") or user),
@@ -436,6 +477,8 @@ class Resolver:
         code = _first_int(payload.get("status_code"))
         if code == 4003110:
             raise Blocked("webcast blocked this IP (4003110)")
+        if code == ROOM_GONE:
+            raise Offline(f"room {room_id} has no running stream (status_code {code})")
         if code != 0:
             detail = _room_error_text(payload)
             lowered = detail.lower()
@@ -453,6 +496,8 @@ class Resolver:
         )
         if _first_int(payload.get("status_code")) == 4003110:
             raise Blocked("webcast blocked this IP (4003110)")
+        if _first_int(payload.get("status_code")) == ROOM_GONE:
+            raise Offline(f"room {room_id} is not live (status_code {ROOM_GONE})")
         room = payload.get("data") if isinstance(payload.get("data"), dict) else {}
         owner = room.get("owner") if isinstance(room.get("owner"), dict) else {}
         if not room:
@@ -496,6 +541,12 @@ class Resolver:
                 if live.streams:
                     return live
                 errors.append("webcast: no stream urls")
+            except Offline as e:
+                # a stale room id says nothing about the user, keep looking;
+                # without a user this is the only answer there is
+                if not user:
+                    raise
+                errors.append(f"webcast: {e}")
             except Retryable as e:
                 errors.append(f"webcast: {e}")
         if user:
